@@ -10,7 +10,7 @@ const Docxtemplater = require('docxtemplater');
 const libre = require('libreoffice-convert');
 const memoryCache = new Map();
 
-const app = express(); 
+const app = express();
 app.use(cors());
 app.use(express.json()); // Para parsear JSON
 
@@ -180,7 +180,7 @@ app.post('/download-and-send', async (req, res) => {
         if (!fs.existsSync(downloadsDir)) {
             fs.mkdirSync(downloadsDir);
         }
-        
+
         // Guarda el archivo descargado temporalmente
         const filePath = path.join(__dirname, 'downloads', fileName);
         fs.writeFileSync(filePath, response.data);
@@ -270,9 +270,22 @@ async function modifyDocxForPdf(inputBuffer) {
     return buf;
 }
 
-async function convertDocxToPdf(inputBuffer, data) {
+async function convertDocxToPdf(inputBuffer) {
     // Crear un nuevo DOCX con los espacios en blanco utilizando la función específica para PDF
-    const docWithSpacesBuffer = await modifyDocxForPdf(inputBuffer, data);
+    const docWithSpacesBuffer = await modifyDocxForPdf(inputBuffer);
+
+    /*const pdfConversionResponse = await axios({
+        method: 'POST',
+        url: 'https://api.cloudmersive.com/convert/docx/to/pdf',
+        data: docWithSpacesBuffer,
+        headers: {
+            'Content-Type': 'application/octet-stream',
+            'Apikey': CLOUDMERSIVE_API_KEY
+        },
+        responseType: 'arraybuffer'
+    });
+
+    return pdfConversionResponse.data;*/
 
     return new Promise((resolve, reject) => {
         libre.convert(docWithSpacesBuffer, '.pdf', undefined, (err, done) => {
@@ -285,6 +298,7 @@ async function convertDocxToPdf(inputBuffer, data) {
 
 // Endpoint para procesar el archivo DOCX y guardarlo en la carpeta 'hojas de ruta'
 app.post('/generate-document', async (req, res) => {
+    console.time('Tiempo total de procesamiento');
     const uploadDir = path.join(__dirname, 'uploads');
     const outputDir = path.join(__dirname, 'hojas de ruta');
 
@@ -303,7 +317,8 @@ app.post('/generate-document', async (req, res) => {
 
     try {
         // Leer el archivo DOCX desde la carpeta 'upload'
-        const inputBuffer = fs.readFileSync(inputDocxPath);
+        // const inputBuffer = fs.readFileSync(inputDocxPath);
+        const inputBuffer = await fs.promises.readFile(inputDocxPath);
 
         let modifiedDocxBuffer;
 
@@ -318,44 +333,71 @@ app.post('/generate-document', async (req, res) => {
             modifiedDocxBuffer = await modifyDocx(inputBuffer, data);
         }
 
-        // Guardar el documento modificado como DOCX en la carpeta 'hojas de ruta'
-        fs.writeFileSync(outputDocxPath, modifiedDocxBuffer);
+        // Guardar el DOCX y el PDF
+        await fs.promises.writeFile(outputDocxPath, modifiedDocxBuffer);
 
-        // Convertir el DOCX modificado a PDF
-         const pdfBuffer = await convertDocxToPdf(modifiedDocxBuffer, data);
-
-        // Guardar el PDF en la carpeta 'hojas de ruta'
-        fs.writeFileSync(outputPdfPath, pdfBuffer);
-
-        // Enviar el archivo PDF como respuesta
-        // res.sendFile(outputPdfPath);
-        
         res.status(200).send('Documento modificado');
     } catch (err) {
         console.error('Error:', err);
         res.status(500).send('Internal Server Error');
     }
+    console.timeEnd('Tiempo total de procesamiento');
 });
 
 
 
 // Endpoint para recuperar el documento PDF
-app.get('/get-document/:nrotramite', (req, res) => {
+app.get('/get-document/:nrotramite', async (req, res) => {
     const outputDir = path.join(__dirname, 'hojas de ruta');
     const { nrotramite } = req.params;
 
-    // Definir la ruta del archivo PDF
+    const outputDocxPath = path.join(outputDir, `${nrotramite}.docx`);
     const outputPdfPath = path.join(outputDir, `${nrotramite}.pdf`);
 
-    // Verificar si el archivo PDF existe
-    if (fs.existsSync(outputPdfPath)) {
-        // Enviar el archivo PDF como respuesta
-        res.sendFile(outputPdfPath);
+    // Verificar si el archivo DOCX existe
+    if (fs.existsSync(outputDocxPath)) {
+        try {
+            // Variables para almacenar el buffer del PDF
+            let pdfBuffer;
+
+            // Verificar si el PDF existe y está actualizado
+            let pdfExists = fs.existsSync(outputPdfPath);
+            if (pdfExists) {
+                const [docxStats, pdfStats] = await Promise.all([
+                    fs.promises.stat(outputDocxPath),
+                    fs.promises.stat(outputPdfPath)
+                ]);
+
+                // Si el DOCX ha sido modificado después del PDF, necesitamos regenerar el PDF
+                if (docxStats.mtime > pdfStats.mtime) {
+                    pdfExists = false;
+                }
+            }
+
+            if (pdfExists) {
+                // Leer el PDF existente
+                pdfBuffer = await fs.promises.readFile(outputPdfPath);
+            } else {
+                // Leer el DOCX y convertirlo a PDF
+                const docxBuffer = await fs.promises.readFile(outputDocxPath);
+                pdfBuffer = await convertDocxToPdf(docxBuffer);
+
+                // Guardar el nuevo PDF
+                await fs.promises.writeFile(outputPdfPath, pdfBuffer);
+            }
+
+            // Enviar el PDF como respuesta
+            res.setHeader('Content-Type', 'application/pdf');
+            res.send(pdfBuffer);
+        } catch (err) {
+            console.error('Error al procesar el documento:', err);
+            res.status(500).send('Error al obtener el documento');
+        }
     } else {
-        // Si el archivo no existe, enviar un error 404
         res.status(404).send('Documento no encontrado');
     }
 });
+
 
 const PORT = 3000;
 app.listen(PORT, () => {
