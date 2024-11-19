@@ -34,7 +34,7 @@ const drive = google.drive({
     auth: oauth2Client,
 });
 
-// Ruta para subir archivos de Word
+//Ruta para subir archivos de Word
 app.post('/upload', async (req, res) => {
     const { fileName, parametro, folder } = req.body;
     const filePath = path.join(__dirname, 'uploads', fileName);
@@ -70,6 +70,70 @@ app.post('/upload', async (req, res) => {
         res.status(500).send('Failed to upload file');
     }
 });
+// app.post('/upload', async (req, res) => {
+//     const { fileName, parametro, folder } = req.body;
+//     const filePath = path.join(__dirname, 'uploads', fileName);
+
+//     if (!fs.existsSync(filePath)) {
+//         return res.status(404).send('File not found');
+//     }
+
+//     // Modifica el nombre del archivo para incluir el número
+//     const newFileName = `${parametro}_${fileName}`;
+
+//     try {
+//         // Busca o crea la carpeta con el nombre especificado
+//         let folderId = null;
+
+//         // Buscar la carpeta con el nombre especificado
+//         const folderSearch = await drive.files.list({
+//             q: `name='${folder}' and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+//             fields: 'files(id, name)',
+//         });
+
+//         if (folderSearch.data.files.length > 0) {
+//             // La carpeta ya existe, usa su ID
+//             folderId = folderSearch.data.files[0].id;
+//         } else {
+//             // La carpeta no existe, crearla
+//             const folderMetadata = {
+//                 name: folder,
+//                 mimeType: 'application/vnd.google-apps.folder',
+//             };
+
+//             const folderCreation = await drive.files.create({
+//                 requestBody: folderMetadata,
+//                 fields: 'id',
+//             });
+
+//             folderId = folderCreation.data.id;
+//         }
+
+//         // Configuración del archivo a subir
+//         const fileMetadata = {
+//             name: newFileName,
+//             mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+//             parents: [folderId],
+//         };
+
+//         const media = {
+//             mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+//             body: fs.createReadStream(filePath),
+//         };
+
+//         const response = await drive.files.create({
+//             requestBody: fileMetadata,
+//             media: media,
+//             fields: 'id',
+//         });
+
+//         res.status(200).json({ message: 'File uploaded successfully', fileId: response.data.id });
+//     } catch (error) {
+//         console.error('Failed to upload file:', error.message);
+//         res.status(500).send('Failed to upload file');
+//     }
+// });
+
 
 // Endpoint para eliminar un archivo
 app.delete('/delete/:fileId', async (req, res) => {
@@ -186,21 +250,30 @@ app.post('/download-and-send', async (req, res) => {
         fs.writeFileSync(filePath, response.data);
 
         // Convierte el archivo de Word a PDF usando la API de Cloudmersive
-        const pdfConversionResponse = await axios({
-            method: 'POST',
-            url: 'https://api.cloudmersive.com/convert/docx/to/pdf',
-            data: fs.readFileSync(filePath),
-            headers: {
-                'Content-Type': 'application/octet-stream',
-                'Apikey': CLOUDMERSIVE_API_KEY
-            },
-            responseType: 'arraybuffer'
+        // const pdfConversionResponse = await axios({
+        //     method: 'POST',
+        //     url: 'https://api.cloudmersive.com/convert/docx/to/pdf',
+        //     data: fs.readFileSync(filePath),
+        //     headers: {
+        //         'Content-Type': 'application/octet-stream',
+        //         'Apikey': CLOUDMERSIVE_API_KEY
+        //     },
+        //     responseType: 'arraybuffer'
+        // });
+
+        // Opción 2: Usar libreoffice-convert
+        pdfBuffer = await new Promise((resolve, reject) => {
+            libre.convert(fs.readFileSync(filePath), '.pdf', undefined, (err, done) => {
+                if (err) return reject(err);
+                resolve(done);
+            });
         });
 
         // Configura los headers de la respuesta para enviar el archivo PDF
         res.setHeader('Content-Disposition', `attachment; filename="${path.basename(fileName, path.extname(fileName))}.pdf"`);
         res.setHeader('Content-Type', 'application/pdf');
-        res.send(pdfConversionResponse.data);
+        // res.send(pdfConversionResponse.data);
+        res.send(pdfBuffer);
 
         // Elimina el archivo temporal después de enviarlo
         fs.unlink(filePath, (err) => {
